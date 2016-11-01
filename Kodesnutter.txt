@@ -1,0 +1,244 @@
+﻿/*Bruk av cat for å sette sammen tall/strenger*/
+data cat_aar_alder;
+set testsett1;
+catvar=input(cat(strip(aar), strip(put(alder,z2.))),6.);
+run;
+
+-----------------------------------------------------------------------------------------
+
+/*Lage tabell for kjønn og år*/
+PROC TABULATE DATA=Datasett;
+	CLASS Aar ErMann /	ORDER=UNFORMATTED MISSING;
+	TABLE 
+/* Row Dimension */
+ErMann={LABEL=""}*N ALL={LABEL="Total pr år"}*N,
+/* Column Dimension */
+Aar ALL={LABEL="Total"};
+quit;
+
+----------------------------------------------------------------------------------------
+
+/*MER AVANSERT TABELL*/
+
+/*Lage tabell for DRG-type/hastegrad og behandlende institusjon vs. år*/
+Options nobyline; /*Fjerner automatisk tittel for sorteringsvariabel*/
+title "Antall opphold for beboere i opptaksområdet for &Sted sykehus";
+title2 "#byval(aktivitetskategori3)"; /*Legger på egen tittel for sorteringsvariabel istedet for automatisk tittel*/
+
+PROC TABULATE DATA=&Sted._RegMerke MISSING CLASSDATA=CLASS; /*Bruker CLASS datasettet for å bestemme kategoriene i tabellen*/
+
+BY aktivitetskategori3; /*Sorterer på aktivitetskategori 3 så det blir en tabell pr mulig verdi av variabelen*/
+	CLASS Reg Aar DRGtypeHastegrad; /*Variabler som skal telles opp*/
+	KEYWORD ALL / s=<parent>{background=lightgray}; /*Alle headinger for summer skal ha lysgrå bakgrunn*/
+
+TABLE /*Tabelldefinisjon starter her*/
+
+/* Row Dimension */
+DRGtypeHastegrad={LABEL=''}*( Reg={LABEL=''}  /*Sorterer rader på DRGtypeHastegrad OG Reg*/
+ALL={LABEL="Sum"}*{s=<parent>{background=lightgray}} )  /*Delsum for hver verdi av DRGtypeHastegrad. Grå bakgrunn også i radene.*/
+ALL={s={foreground=white background=grey} LABEL="Total"}* /*Totalsum, heading har hvit skrift på grå bunn.*/
+{s=<parent>{foreground=white background=grey}} , /*Totalsummen skal ha hvit skrift på grå bunn også i radene.*/
+
+/* Column Dimension */
+Aar ALL={LABEL="Total"} /*Sorterer kolonner på år.*/
+/ row=float box='DRG-type/hastegrad og beh. institusjon' /*Fjerner unødvendige bokser, legger til skrift i den store*/
+misstext='0'; /*Missing verdier skal printes ut som 0*/
+LABEL aar='År'; /*Kolonneheading*/
+KEYLABEL N=' '; /*Fjerner label for tellevariabel N*/
+
+quit; title; title2;
+
+----------------------------------------------------------------------------------------
+
+/*Tell unike pid'er og legg til oppholdsnummer*/
+data utdata;
+set inndata;
+by pid;
+if first.pid=1 then unik=1; /*Hvis det er første gang du finner en pid, sett unik=1*/
+if first.pid=1 then oppholdsnr=0;
+	oppholdsnr+1;
+run;
+
+----------------------------------------------------------------------------------------
+
+/*Telle antall opphold pr PID*/
+PROC SQL;
+   CREATE TABLE ant_pid_bypid AS 
+   SELECT PID, 
+          /* MAX_of_oppholdsnr */
+            (MAX(oppholdsnr)) AS MAX_of_oppholdsnr
+      FROM inndatasett
+      GROUP BY PID;
+QUIT;
+
+----------------------------------------------------------------------------------------
+
+/*Lager en stringvariabel med teksten i formatet til den numeriske variablene BehSh*/
+Data manipulere;
+set manipulere;
+	BehSh_format=vvalue(BehSh);
+	label BehSh_format="Formater som verdier";
+run;
+
+----------------------------------------------------------------------------------------
+
+/*Gjøre om fra string til datovariabel (numerisk variabel med datoformat)*/
+options locale=NB_No; /*Definerer språkområde for datoformat/klokkeslett/store tall etc.*/
+Data manipulere;
+set manipulere;
+	inndato1=input(inndato,NLDATE10.); /*Input statement for å indikere overgang fra string til numerisk (ant. dager fra 1/1 1960)*/
+	utdato1=input(utdato,NLDATE10.); /*NLDATE: National language date.*/
+
+	Utaar=Year(Utdato1);
+	Utmnd=Month(Utdato1);
+	Ukedag=Weekday(Utdato1); /*Må finne ut hvilket tall som tilsvarer hvilken ukedag, ved å sjekke kalender for en av datoene i settet.*/
+
+	format inndato1 utdato1 eurdfdd10.; /*Vil ha datoformat på den numeriske variabelen. SJEKK AT DET BLIR RETT FØR DU DROPPER ORIGINALE DATOVAR*/
+run;
+
+----------------------------------------------------------------------------------------
+
+/*LAG*/
+
+/*Sorterer*/
+proc sort data=dager;
+by pid inn ut; /*Definerer sorteringsrekkefølgen. 
+Pr def i stigende rekkefølge. Kan velge synkende ved å angi descending før variabelen.*/
+run;
+/*Lager ny variabel hvor alle pid'er er dyttet ett hakk ned, samme for utdato*/
+data dager;
+set dager;
+pid_1ned=lag(pid); /*ETT hakk ned*/
+pid_2ned=lag2(pid); /*TO hakk ned*/
+ut_1ned=lag(ut);
+
+if pid=pid_1ned then do;			/*beregner differansen mellom utdato og neste inndato HVIS neste inndato gjelder samme pasient*/
+	dager_mellom=inn-ut_1ned;
+end;
+
+format ut_1ned ddmmyy10.; /*Setter datoformat på ut_1ned*/
+run;
+
+----------------------------------------------------------------------------------------
+
+/*LEAD*/
+/*Kode som vi ikke hels skjønner hvordan funker*/
+DATA dager2;
+_N_ ++1; /*øker tellevariabel _N_ med 1. Første gang løkka kjøres blir N=2 her.*/
+If _N_ <= N then do; /*Hvis _N_<=antall observasjoner i datasettet dager. 
+Siste runde løkka kjøres blir dette FALSE, pga at vi har lagt 1 til _N_ i starten.*/
+	Set dager point=_N_; /*Velger observasjonsnummer som skal leses. Første gang løkka kjøres starter vi med obs #2*/
+	PUT _ALL_;
+	LeadPID=PID; /*Første gang løkka kjøres: LeadPID settes lik PID-verdi nr 2 i datasettet*/
+	PUT _ALL_;
+	Leadut=ut;	/*Første gang løkka kjøres: Leadut settes lik ut-verdi nr 2 i datasettet*/
+end;
+else LeadPID=.; /*Gjøres kun for siste step i løkka.*/
+
+set dager nobs=n; /*Angir antall observasjoner i datasettet "dager" eksplisitt, hvis ikke blir n missing og loopen stopper.
+
+Dette er nødvendig fordi lengden av "dager" ikke er veldefinert når vi har "åpnet" datasettet for lesing/skriving.
+Dette er ikke nødvendig før vi "åpner" datasettet for lesing/skriving, fordi lengden av "dager" da er veldefinert.
+
+Hvis vi setter n i starten blir PID-verdiene og verdiene i ut-variabelen skrevet over med samme verdier som 
+LeadPID og Leadut. Usikker på hvorfor det skjer.*/
+
+format Leadut ddmmyy10.;
+run;
+
+----------------------------------------------------------------------------------------
+
+/*Trekke tilfeldig utvalg observasjoner*/
+proc surveyselect data=npr_skde.testavd_2015_tilrettelagt
+	Out=Randomtest15
+	Method=srs
+	N=10000;
+quit;
+
+----------------------------------------------------------------------------------------
+
+/* Aggreger for kjønns- og aldersstandardisering  (Fra "Data_til_rateprogram" i Eksempler-mappa)*/
+proc sql;
+   create table infarktHN_agg as 
+   select distinct aar, ermann, alder, komnr, bydel, BoRHF, SUM(AkuttInfarkt) as Infarkt
+   from infarktHN
+   group by aar, ermann, alder, komnr, bydel;
+quit;
+
+----------------------------------------------------------------------------------------
+
+/*Summerer variabelen "ant_m" over alle kommuner/bydeler i et BoHF for hvert år.
+Utdataene inkluderer bare totalsummen for hvert BoHF/år, ikke de kumulative summene*/
+proc sort data=inndata out=inndata_sorted;
+by aar BoHF;
+quit;
+
+data utdata;
+set inndata_sorted;
+by aar BoHF;
+if first.BoHF then sum_m=0;
+sum_m+ant_m;
+if last.BoHF;
+keep aar BoHF sum_m;
+run;
+
+----------------------------------------------------------------------------------------
+
+/*Bruk av array for å kompensere for at FOR-løkker ikke fins*/
+data var_est;
+set &datainn;
+sum=0;
+array rate_aar (&ant_aar) rate20:;
+do i=1 to &ant_aar;
+	if rate_aar(i) ne . then sum=sum+((rate_aar(i)-rateSnitt)**2);
+end;
+var_est=sum/(&ant_aar-1);
+
+run;
+
+----------------------------------------------------------------------------------------
+
+/*Finne minste og største verdi av en variabel og sende til utdatasett*/
+proc means data=var_est min max;
+var var_LowerBound var_UpperBound;
+output out=sjekk_overlapp min(var_UpperBound)=laveste_var_UB max(var_LowerBound)=hoyeste_var_LB;
+run;
+
+----------------------------------------------------------------------------------------
+
+/* Hente NPR-data fra de aktuelle år for offentlige sykehus*/
+data Oppdat_tons_avd;
+set npr_skde.magnus_avd_2011 npr_skde.magnus_avd_2012 
+npr_skde.magnus_avd_2013 npr_skde.magnus_avd_2014
+npr_skde.magnus_avd_2015;
+run;
+
+/* Hente NPR-data fra de aktuelle år for priv avtalespes*/
+data Oppdat_tons_avtspes;
+set npr_skde.magnus_avtspes_2011 npr_skde.magnus_avtspes_2012
+npr_skde.magnus_avtspes_2013 npr_skde.magnus_avtspes_2014
+npr_skde.magnus_avtspes_2015;
+run;
+
+----------------------------------------------------------------------------------------
+
+/*Henter aktivitetskategori 4 fra Parvus*/
+%VarFraParvus(dsnMagnus=Oppdat_tons,var_som=aktivitetskategori4,var_avtspes=)
+
+
+/*Lage datasett*/
+data dager;
+input pid inn ut hendelse;
+format inn ddmmyy10. ut ddmmyy10.;
+datalines;
+1 0 4 0
+1 6 8 1
+1 15 20 1
+1 30 54 0
+2 1 1 1
+2 2 5 1
+2 560 570 1
+2 1500 1503 1
+2 1505 1506 0
+;
+run;
