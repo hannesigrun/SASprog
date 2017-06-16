@@ -242,3 +242,35 @@ datalines;
 2 1505 1506 0
 ;
 run;
+
+----------------------------------------------------------------------------------------
+
+/*Setter sammen to datasett til et nytt datasett med proc sql*/
+/*NB! Kun variabler som er i BEGGE settene kommer med i det nye*/
+
+Title 'Merge pas utvalg';
+proc sql;
+create table pas_utvalg as
+select Pasienter_alle, pas_utvalg_alle.BoHF, Pasienter_u340, pas_utvalg_alle.Fodte
+from pas_utvalg_alle left join pas_utvalg_u340
+on pas_utvalg_alle.BoHF=pas_utvalg_u340.BoHF;
+quit; title;
+
+----------------------------------------------------------------------------------------
+
+/*Setter sammen to datasett til et nytt datasett med data-steg*/
+/*NB! Datasettene må være sortert likt. ALLE variabler som er i ett av settene kommer med i det nye.*/
+
+/*sorterer datasettene slik at de kan settes sammen*/
+proc sort data=agg;
+by aktivitetskategori3 Reg BoReg aar;
+quit;
+proc sort data=ratedata;
+by aktivitetskategori3 Reg BoReg aar;
+quit;
+
+/*setter datasettene med antall opphold og rater sammen til ett, som brukes til å lage tabell*/
+data tabelldata_merged;
+set agg;
+set ratedata;
+run;
